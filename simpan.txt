@@ -1,0 +1,184 @@
+
+
+# API Endpoint untuk Login
+@app.route('/login', methods=['POST'])
+def login():
+    data = request.json
+    usr = data.get('username')
+    pas = data.get('password')
+
+    cl = instagrapi.Client()
+    try:
+        cl.login(usr, pas)
+        session_id = usr  # Gunakan username sebagai session ID
+        session['session_id'] = session_id
+        clients[session_id] = cl
+
+        # Simpan kredensial ke file session
+        session_file = os.path.join(app.config['SESSION_FILE_DIR'], session_id)
+        with open(session_file, 'w') as f:
+            f.write(f"{usr}\n{pas}")
+
+        return jsonify({"status": "success", "session_id": session_id, "message": "Login berhasil!"}), 200
+    except instagrapi.exceptions.BadPassword:
+        return jsonify({"status": "error", "message": "Password salah!"}), 401
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Logout
+@app.route('/logout', methods=['POST'])
+def logout():
+    session_id = request.json.get('session_id')
+    if session_id in clients:
+        del clients[session_id]
+        os.remove(os.path.join(app.config['SESSION_FILE_DIR'], session_id))
+    session.pop('session_id', None)
+    return jsonify({"status": "success", "message": "Logout berhasil!"}), 200
+
+@app.route('/active_sessions', methods=['GET'])
+def active_sessions():
+    """Mengembalikan daftar sesi yang aktif."""
+    session_info = []
+    for session_id in clients:
+        # Mengambil username dari session_id
+        username = session_id  # Di sini kita menggunakan username sebagai session_id
+        session_info.append({
+            "session_id": session_id,
+            "username": username
+        })
+    return jsonify({"status": "success", "sessions": session_info}), 200
+
+# API Endpoint untuk Kirim Pesan Langsung
+@app.route('/send_dm', methods=['POST'])
+def send_dm():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    recipient_username = data.get('to')
+    message_text = data.get('message')
+
+    try:
+        user_id = cl.user_id_from_username(recipient_username)
+        cl.direct_message(user_id, message_text)
+        return jsonify({"status": "success", "message": "Direct message sent!"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Dapatkan Pesan Langsung
+@app.route('/get_dms', methods=['POST'])
+def get_dms():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    try:
+        inbox = cl.direct_threads()
+        messages = []
+        for thread in inbox:
+            for item in thread['items']:
+                messages.append({
+                    "id": item['id'],
+                    "text": item['text'],
+                    "from": item['user']['username'],
+                    "timestamp": item['timestamp']
+                })
+        return jsonify({"status": "success", "messages": messages}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Comment
+@app.route('/comment', methods=['POST'])
+def comment():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    url = data.get('url')
+    comment_text = data.get('comment_text')
+    try:
+        media_id = cl.media_pk_from_url(url)
+        cl.media_comment(media_id, comment_text)
+        return jsonify({"status": "success", "message": "Komentar diposting!"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Like Media
+@app.route('/like', methods=['POST'])
+def like_media():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    url = data.get('url')
+    try:
+        media_id = cl.media_pk_from_url(url)
+        cl.media_like(media_id)
+        return jsonify({"status": "success", "message": "Media disukai!"}), 200
+    except instagrapi.exceptions.MediaError:
+        return jsonify({"status": "error", "message": "Terjadi kesalahan pada media dari Instagram"}), 400
+    except instagrapi.exceptions.MediaNotFound:
+        return jsonify({"status": "error", "message": "Media tidak ditemukan!"}), 404
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Upload Post
+@app.route('/upload_post', methods=['POST'])
+def upload_post():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    media_url = data.get('url')
+    caption = data.get('caption')
+
+    try:
+        temp_path = download_file_from_url(media_url)
+        cl.photo_upload(path=temp_path, caption=caption)
+        os.remove(temp_path)
+        return jsonify({"status": "success", "message": "Post diupload!"}), 200
+    except instagrapi.exceptions.MediaError:
+        return jsonify({"status": "error", "message": "Media tidak diupload!"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+
+# API Endpoint untuk Upload Reel
+@app.route('/upload_reel', methods=['POST'])
+def upload_reel():
+    data = request.json
+    session_id = data.get('session_id')
+    cl = get_client(session_id)
+
+    if cl is None:
+        return jsonify({"status": "error", "message": "Session tidak ditemukan atau sudah expired!"}), 401
+
+    media_url = data.get('url')
+    caption = data.get('caption')
+
+    try:
+        temp_path = download_file_from_url(media_url)
+        cl.clip_upload(path=temp_path, caption=caption)
+        os.remove(temp_path)
+        return jsonify({"status": "success", "message": "Reel diupload!"}), 200
+    except instagrapi.exceptions.MediaError:
+        return jsonify({"status": "error", "message": "Reel tidak diupload!"}), 400
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 400
+    
+
+
